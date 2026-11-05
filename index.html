@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#101a30">
   <title>Gestión de Riesgo | Protección Civil</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -35,32 +35,55 @@
       <div class="top-actions"><div class="user-label"><strong id="currentUserName"></strong><span id="currentRole"></span></div><button class="button ghost small" id="logoutButton">Cerrar sesión</button></div>
     </header>
     <nav class="app-nav" aria-label="Secciones">
-      <button class="nav-button active" data-view="mapView">Mapa</button>
-      <button class="nav-button" data-view="recordsView">Inspecciones</button>
-      <button class="nav-button hidden" id="adminNav" data-view="adminView">Administrar cuentas</button>
+      <button class="nav-button active" data-view="mapView"><span class="nav-icon" aria-hidden="true">⌖</span>Mapa</button>
+      <button class="nav-button" data-view="recordsView"><span class="nav-icon" aria-hidden="true">▤</span>Inspecciones</button>
+      <button class="nav-button hidden" id="adminNav" data-view="adminView"><span class="nav-icon" aria-hidden="true">⚙</span>Administrar</button>
+      <button class="nav-button" data-view="referencePlacesView"><span class="nav-icon" aria-hidden="true">⌖</span>Lugares agregados</button>
+      <button class="nav-button" data-view="settingsView"><span class="nav-icon" aria-hidden="true">⚙</span>Configuración</button>
     </nav>
     <main class="view map-view" id="mapView">
       <div id="map" aria-label="Mapa de Apure dividido por municipios con inspecciones"></div>
-      <section class="map-date-picker" aria-label="Filtrar inspecciones del mapa por fecha">
+      <section class="map-hud-editor hidden" id="mapHudEditor" aria-label="Editor de controles del mapa">
+        <div class="map-hud-editor-head"><div><strong>Editar controles</strong><small>Arrastra ⠿ en el mapa para acomodarlos</small></div><button class="hud-done-button" id="finishHudEditing" type="button">Cerrar edición</button></div>
+        <div class="map-hud-panel-list" role="group" aria-label="Seleccionar control para personalizar">
+          <button type="button" class="hud-panel-chip active" data-hud-select="dates">◷ <span>Fechas</span></button>
+          <button type="button" class="hud-panel-chip" data-hud-select="tools">☷ <span>Herramientas</span></button>
+          <button type="button" class="hud-panel-chip" data-hud-select="status">⌖ <span>Coordenadas</span></button>
+          <button type="button" class="hud-panel-chip" data-hud-select="report">＋ <span>Inspección</span></button>
+        </div>
+        <div class="map-hud-editor-controls">
+          <label class="hud-visible-control"><input id="hudPanelVisible" type="checkbox" checked><span>Visible</span></label>
+          <label class="hud-slider-control"><span>Tamaño <strong id="hudPanelSizeLabel">100 %</strong></span><input id="hudPanelSize" type="range" min="70" max="140" step="5" value="100"></label>
+          <label class="hud-slider-control"><span>Opacidad <strong id="hudPanelOpacityLabel">90 %</strong></span><input id="hudPanelOpacity" type="range" min="25" max="100" step="5" value="90"></label>
+          <button class="hud-reset-button" id="resetHudPanel" type="button" title="Restablecer posición, tamaño y opacidad del control">Restablecer</button>
+        </div>
+      </section>
+      <section class="map-date-picker" data-map-panel="dates" aria-label="Filtrar inspecciones del mapa por fecha">
+        <button class="map-panel-handle" type="button" data-panel-drag="dates" aria-label="Mover panel de fechas" title="Arrastrar para mover">⠿</button>
         <div class="map-date-controls"><button class="map-date-arrow" id="mapDatePrevious" type="button" aria-label="Días anteriores">‹</button><div class="map-date-days" id="mapDateDays" role="group" aria-label="Seleccionar día"></div><button class="map-date-arrow" id="mapDateNext" type="button" aria-label="Días siguientes">›</button></div>
         <div class="map-date-footer"><span id="mapDateSummary" aria-live="polite">Mostrando todas las fechas</span><label class="map-date-calendar" for="mapDateInput" aria-label="Elegir fecha"><span aria-hidden="true">▦</span><input id="mapDateInput" type="date" aria-label="Elegir fecha para ver inspecciones"></label><button id="mapDateAll" type="button" aria-pressed="true">Ver todas</button></div>
       </section>
-      <aside class="map-tools">
-        <button class="map-tools-toggle" id="toggleMapTools" type="button" aria-expanded="true" aria-controls="mapToolsContent"><span>Herramientas del mapa</span><span class="map-tools-chevron" aria-hidden="true">⌄</span></button>
+      <aside class="map-tools" data-map-panel="tools">
+        <button class="map-panel-handle" type="button" data-panel-drag="tools" aria-label="Mover herramientas del mapa" title="Arrastrar para mover">⠿</button>
+        <button class="map-tools-toggle" id="toggleMapTools" type="button" aria-expanded="true" aria-controls="mapToolsContent"><span class="map-tools-heading"><span class="map-tools-icon" aria-hidden="true">⌖</span><span class="map-tools-heading-copy"><strong>Herramientas del mapa</strong><small>Capas, riesgo y ubicación</small></span></span><span class="map-tools-chevron" aria-hidden="true">⌄</span></button>
         <div id="mapToolsContent">
+          <div class="map-tool-section-label">Municipios</div>
           <div class="municipality-legend" id="municipalityLegend" role="group" aria-label="Municipios de Apure"><strong>Municipios de Apure</strong><small>Cargando límites…</small></div>
-          <label class="legend-row"><input type="checkbox" checked data-filter="high"><span class="dot high"></span> Alto riesgo</label>
-          <label class="legend-row"><input type="checkbox" checked data-filter="medium"><span class="dot medium"></span> Riesgo medio</label>
-          <label class="legend-row"><input type="checkbox" checked data-filter="safe"><span class="dot safe"></span> Seguro</label>
-          <p class="map-edit-hint">Arrastra los puntos que administras para moverlos. Abre un punto para editarlo o eliminarlo.</p>
-          <label class="field map-layer-field" for="mapLayerSelect">Tipo de mapa</label>
-          <select class="map-layer" id="mapLayerSelect" aria-label="Tipo de mapa"><option value="streets">Calles</option><option value="satellite" selected>Satélite</option></select>
-          <div class="map-actions"><button class="button secondary" id="locateMe">Mi ubicación</button><button class="button ghost" id="zoomApure">Centrar Apure</button></div>
-          <button class="button secondary map-place-button hidden" id="openPlace">＋ Agregar punto</button>
+          <div class="map-tool-section-label">Filtrar por nivel de riesgo</div>
+          <label class="legend-row"><input type="checkbox" checked data-filter="high"><span class="dot high"></span><span>Alto riesgo</span></label>
+          <label class="legend-row"><input type="checkbox" checked data-filter="medium"><span class="dot medium"></span><span>Riesgo medio</span></label>
+          <label class="legend-row"><input type="checkbox" checked data-filter="safe"><span class="dot safe"></span><span>Seguro</span></label>
+          <p class="map-edit-hint">Los lugares son fijos en el mapa. En «Lugares agregados» puedes consultarlos; solo administración puede editarlos o eliminarlos.</p>
+          <div class="map-tool-section-label">Visualización</div>
+          <label class="field map-layer-field" for="mapLayerSelect">Fondo del mapa</label>
+          <select class="map-layer" id="mapLayerSelect" aria-label="Fondo del mapa"><option value="streets">Calles</option><option value="satellite" selected>Satélite</option></select>
+          <div class="map-tool-section-label map-navigation-label">Navegación</div>
+          <div class="map-actions"><button class="button secondary" id="locateMe"><span aria-hidden="true">◎</span> Mi ubicación</button><button class="button ghost" id="zoomApure"><span aria-hidden="true">⌖</span> Centrar Apure</button></div>
+          <button class="button secondary map-place-button hidden" id="openPlace">＋ Agregar punto de referencia</button>
         </div>
       </aside>
-      <div class="map-status" id="mapStatus">7.5° N · 66.0° O</div>
-      <button class="report-fab" id="openReport">＋ Reportar inspección</button>
+      <div class="map-status-panel" data-map-panel="status"><button class="map-panel-handle" type="button" data-panel-drag="status" aria-label="Mover coordenadas del mapa" title="Arrastrar para mover">⠿</button><div class="map-status" id="mapStatus">7.5° N · 66.0° O</div></div>
+      <div class="map-report-panel" data-map-panel="report"><button class="map-panel-handle" type="button" data-panel-drag="report" aria-label="Mover botón de inspección" title="Arrastrar para mover">⠿</button><button class="report-fab" id="openReport">＋ Reportar inspección</button></div>
     </main>
     <main class="view panel-view hidden" id="recordsView">
       <div class="panel-title records-header">
@@ -101,6 +124,58 @@
         <section class="admin-section"><h2>Solicitudes pendientes</h2><p>Las cuentas requieren aprobación para ingresar.</p><div class="admin-list" id="pendingList"></div></section>
         <section class="admin-section"><h2>Cuentas registradas</h2><p>Usuarios aprobados y administrador de la aplicación.</p><div class="admin-list" id="usersList"></div></section>
       </div>
+    </main>
+    <main class="view panel-view hidden" id="referencePlacesView">
+      <div class="panel-title"><div><h1>Lugares agregados</h1><p>Consulta los puntos de referencia agregados manualmente al mapa.</p></div></div>
+      <section class="admin-section reference-places-section">
+        <div class="reference-places-heading"><h2>Lugares de referencia</h2><span class="reference-places-count" id="referencePlacesCount">0 lugares</span></div>
+        <div class="admin-list" id="referencePlacesList"></div>
+      </section>
+    </main>
+    <main class="view panel-view hidden" id="settingsView">
+      <div class="panel-title"><div><h1>Configuración</h1><p>Personaliza el mapa y la información visible en este dispositivo.</p></div></div>
+      <section class="admin-section settings-section">
+        <h2>Preferencias del mapa</h2>
+        <p>Estos ajustes se guardan en este dispositivo y se aplican también a las herramientas del mapa.</p>
+        <div class="settings-list">
+          <label class="settings-row" for="settingsMapLayer">
+            <span><strong>Tipo de mapa</strong><small>Elige la vista inicial del mapa.</small></span>
+            <select id="settingsMapLayer" aria-label="Tipo de mapa predeterminado"><option value="satellite">Satélite</option><option value="streets">Calles</option></select>
+          </label>
+          <label class="settings-row settings-switch-row" for="settingsMunicipalities">
+            <span><strong>Límites municipales</strong><small>Muestra u oculta los límites y nombres de los municipios de Apure.</small></span>
+            <input id="settingsMunicipalities" type="checkbox">
+          </label>
+          <fieldset class="settings-risk-filters">
+            <legend>Inspecciones visibles en el mapa</legend>
+            <label class="settings-row settings-switch-row" for="settingsRiskHigh"><span><strong>Alto riesgo</strong><small>Inspecciones que requieren atención inmediata.</small></span><input id="settingsRiskHigh" type="checkbox" data-filter="high"></label>
+            <label class="settings-row settings-switch-row" for="settingsRiskMedium"><span><strong>Riesgo medio</strong><small>Inspecciones que requieren seguimiento.</small></span><input id="settingsRiskMedium" type="checkbox" data-filter="medium"></label>
+            <label class="settings-row settings-switch-row" for="settingsRiskSafe"><span><strong>Seguro</strong><small>Inspecciones con condición estable.</small></span><input id="settingsRiskSafe" type="checkbox" data-filter="safe"></label>
+          </fieldset>
+        </div>
+        <div class="settings-actions"><button class="button secondary" id="resetSettings" type="button">Restaurar valores predeterminados</button><span class="settings-saved" id="settingsSaved" role="status">Cambios guardados en este dispositivo</span></div>
+      </section>
+      <section class="admin-section settings-section">
+        <h2>Sonidos y avisos</h2>
+        <p>Activa un aviso corto al mostrar mensajes de la app. El audio se genera en el dispositivo y no usa archivos ni datos móviles.</p>
+        <div class="settings-list">
+          <label class="settings-row settings-switch-row" for="settingsSoundEnabled"><span><strong>Activar sonidos</strong><small>Reproducir un aviso cuando la app muestre una notificación.</small></span><input id="settingsSoundEnabled" type="checkbox"></label>
+          <label class="settings-row" for="settingsSoundStyle"><span><strong>Estilo del aviso</strong><small>Elige el tono de las notificaciones.</small></span><select id="settingsSoundStyle"><option value="soft">Suave</option><option value="clear">Claro</option><option value="urgent">Alerta</option></select></label>
+          <label class="settings-row settings-range-row" for="settingsSoundVolume"><span><strong>Volumen</strong><small id="settingsSoundVolumeLabel">35 %</small></span><input id="settingsSoundVolume" type="range" min="0" max="100" step="5"></label>
+        </div>
+        <div class="settings-actions"><button class="button secondary" id="testSound" type="button">▶ Probar sonido</button><span class="settings-saved" id="soundTestStatus" role="status"></span></div>
+      </section>
+      <section class="admin-section settings-section">
+        <h2>Paneles del mapa</h2>
+        <p>Ajusta el tamaño y la transparencia aquí, o abre el mapa para mover los paneles. Los cambios se guardan en este dispositivo.</p>
+        <div class="settings-actions"><button class="button secondary" id="editHudFromSettings" type="button">Editar controles en el mapa</button></div>
+        <div class="settings-list map-panel-settings">
+          <fieldset class="map-panel-setting" data-panel-settings="dates"><legend>Filtro de fechas</legend><label class="settings-row settings-switch-row"><span><strong>Mostrar panel</strong><small>Selector de fechas de inspecciones.</small></span><input type="checkbox" data-panel-visible="dates" checked></label><label class="settings-row settings-range-row"><span><strong>Tamaño</strong><small data-panel-size-label="dates">100 %</small></span><input type="range" min="70" max="140" step="5" value="100" data-panel-size="dates"></label><label class="settings-row settings-range-row"><span><strong>Opacidad</strong><small data-panel-opacity-label="dates">90 %</small></span><input type="range" min="25" max="100" step="5" value="90" data-panel-opacity="dates"></label><button class="button ghost small" type="button" data-panel-position-reset="dates">Restablecer posición</button></fieldset>
+          <fieldset class="map-panel-setting" data-panel-settings="tools"><legend>Herramientas del mapa</legend><label class="settings-row settings-switch-row"><span><strong>Mostrar panel</strong><small>Capas, filtros y acciones del mapa.</small></span><input type="checkbox" data-panel-visible="tools" checked></label><label class="settings-row settings-range-row"><span><strong>Tamaño</strong><small data-panel-size-label="tools">100 %</small></span><input type="range" min="70" max="140" step="5" value="100" data-panel-size="tools"></label><label class="settings-row settings-range-row"><span><strong>Opacidad</strong><small data-panel-opacity-label="tools">90 %</small></span><input type="range" min="25" max="100" step="5" value="90" data-panel-opacity="tools"></label><button class="button ghost small" type="button" data-panel-position-reset="tools">Restablecer posición</button></fieldset>
+          <fieldset class="map-panel-setting" data-panel-settings="status"><legend>Coordenadas y estado</legend><label class="settings-row settings-switch-row"><span><strong>Mostrar panel</strong><small>Coordenadas o estado actual del mapa.</small></span><input type="checkbox" data-panel-visible="status" checked></label><label class="settings-row settings-range-row"><span><strong>Tamaño</strong><small data-panel-size-label="status">100 %</small></span><input type="range" min="70" max="140" step="5" value="100" data-panel-size="status"></label><label class="settings-row settings-range-row"><span><strong>Opacidad</strong><small data-panel-opacity-label="status">90 %</small></span><input type="range" min="25" max="100" step="5" value="90" data-panel-opacity="status"></label><button class="button ghost small" type="button" data-panel-position-reset="status">Restablecer posición</button></fieldset>
+          <fieldset class="map-panel-setting" data-panel-settings="report"><legend>Botón de inspección</legend><label class="settings-row settings-switch-row"><span><strong>Mostrar botón</strong><small>Acceso rápido para reportar una inspección.</small></span><input type="checkbox" data-panel-visible="report" checked></label><label class="settings-row settings-range-row"><span><strong>Tamaño</strong><small data-panel-size-label="report">100 %</small></span><input type="range" min="70" max="140" step="5" value="100" data-panel-size="report"></label><label class="settings-row settings-range-row"><span><strong>Opacidad</strong><small data-panel-opacity-label="report">90 %</small></span><input type="range" min="25" max="100" step="5" value="90" data-panel-opacity="report"></label><button class="button ghost small" type="button" data-panel-position-reset="report">Restablecer posición</button></fieldset>
+        </div>
+      </section>
     </main>
   </div>
 
