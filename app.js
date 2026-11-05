@@ -1,5 +1,21 @@
     const STORAGE_KEY = "territorioSeguro.v1";
     const MIGRATION_KEY = "territorioSeguro.migratedToFirebase";
+    const SETTINGS_KEY = "territorioSeguro.settings.v1";
+    const DEFAULT_MAP_PANELS = {
+      dates: { visible: true, size: 100, opacity: 90, x: null, y: null },
+      tools: { visible: true, size: 100, opacity: 90, x: null, y: null },
+      status: { visible: true, size: 100, opacity: 90, x: null, y: null },
+      report: { visible: true, size: 100, opacity: 90, x: null, y: null }
+    };
+    const DEFAULT_SETTINGS = {
+      mapLayer: "satellite",
+      municipalitiesVisible: true,
+      visibleRisks: { high: true, medium: true, safe: true },
+      soundEnabled: false,
+      soundStyle: "soft",
+      soundVolume: 35,
+      mapPanels: DEFAULT_MAP_PANELS
+    };
     const riskNames = { high: "Alto riesgo", medium: "Riesgo medio", safe: "Seguro" };
     const inspectionTypeIcons = {
       "evaluación de riesgo": "⚠",
@@ -26,6 +42,10 @@
     const MAP_MAX_ZOOM = 17;
     const apureReferencePlaces = [{ name: "Sede Protección Civil Regional", category: "Protección Civil", address: "Perimetral Sur, María Nieves, San Fernando, Apure", latitude: 7.8703637, longitude: -67.4820609 }];
     const INITIAL_ADMIN_UID = window.TERRITORIO_INITIAL_ADMIN_UID;
+    let userSettings = loadUserSettings();
+    let audioContext = null;
+    let hudEditing = false;
+    let selectedHudPanel = "dates";
     let firebaseAuth = null;
     let firebaseDatabase = null;
     let firebaseInitializationError = "";
@@ -57,8 +77,10 @@
     let apureMunicipalityLayer = null;
     let apureMunicipalityLabelLayer = null;
     let apureMunicipalityLoadPromise = null;
+    let currentLocationMarker = null;
+    let currentLocationAccuracyCircle = null;
     let referenceLayers = [];
-    let currentMapLayer = "satellite";
+    let currentMapLayer = userSettings.mapLayer;
     let markers = [];
     let referenceMarkers = [];
     let editingInspectionId = null;
@@ -94,6 +116,242 @@
         }
       } catch (error) { console.warn("No se pudieron leer los datos locales", error); }
       return { users: [], invitations: [], inspections: [], referencePlaces: [] };
+    }
+    function loadUserSettings() {
+      try {
+        const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
+        if (!stored || typeof stored !== "object") return createDefaultSettings();
+        const mapPanels = {};
+        Object.entries(DEFAULT_MAP_PANELS).forEach(([name, defaults]) => {
+          const panel = stored.mapPanels?.[name] || {};
+          mapPanels[name] = {
+            visible: panel.visible !== false,
+            size: clampSettingNumber(panel.size, 70, 140, defaults.size),
+            opacity: clampSettingNumber(panel.opacity, 25, 100, defaults.opacity),
+            x: Number.isFinite(panel.x) && panel.x >= 0 && panel.x <= 1 ? panel.x : null,
+            y: Number.isFinite(panel.y) && panel.y >= 0 && panel.y <= 1 ? panel.y : null
+          };
+        });
+        return {
+          mapLayer: stored.mapLayer === "streets" ? "streets" : "satellite",
+          municipalitiesVisible: stored.municipalitiesVisible !== false,
+          visibleRisks: {
+            high: stored.visibleRisks?.high !== false,
+            medium: stored.visibleRisks?.medium !== false,
+            safe: stored.visibleRisks?.safe !== false
+          },
+          soundEnabled: stored.soundEnabled === true,
+          soundStyle: ["soft", "clear", "urgent"].includes(stored.soundStyle) ? stored.soundStyle : DEFAULT_SETTINGS.soundStyle,
+          soundVolume: clampSettingNumber(stored.soundVolume, 0, 100, DEFAULT_SETTINGS.soundVolume),
+          mapPanels
+        };
+      } catch (error) {
+        console.warn("No se pudieron leer las preferencias guardadas.", error);
+        return createDefaultSettings();
+      }
+    }
+    function clampSettingNumber(value, minimum, maximum, fallback) {
+      return Number.isFinite(Number(value)) ? Math.min(maximum, Math.max(minimum, Number(value))) : fallback;
+    }
+    function createDefaultSettings() {
+      return {
+        ...DEFAULT_SETTINGS,
+        visibleRisks: { ...DEFAULT_SETTINGS.visibleRisks },
+        mapPanels: Object.fromEntries(Object.entries(DEFAULT_MAP_PANELS).map(([name, panel]) => [name, { ...panel }]))
+      };
+    }
+    function saveUserSettings() {
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(userSettings));
+        document.getElementById("settingsSaved").textContent = "Cambios guardados en este dispositivo";
+      } catch (error) {
+        console.error("No se pudieron guardar las preferencias.", error);
+        document.getElementById("settingsSaved").textContent = "No se pudieron guardar los cambios";
+        showToast("No se pudieron guardar las preferencias en este dispositivo.");
+      }
+    }
+    function syncMapSettingsControls() {
+      document.getElementById("settingsMapLayer").value = userSettings.mapLayer;
+      document.getElementById("mapLayerSelect").value = userSettings.mapLayer;
+      document.getElementById("settingsMunicipalities").checked = userSettings.municipalitiesVisible;
+      document.querySelectorAll("[data-filter]").forEach(input => {
+        input.checked = userSettings.visibleRisks[input.dataset.filter] !== false;
+      });
+      document.getElementById("settingsSoundEnabled").checked = userSettings.soundEnabled;
+      document.getElementById("settingsSoundStyle").value = userSettings.soundStyle;
+      document.getElementById("settingsSoundVolume").value = userSettings.soundVolume;
+      document.getElementById("settingsSoundVolumeLabel").textContent = `${userSettings.soundVolume} %`;
+      Object.entries(userSettings.mapPanels).forEach(([name, panel]) => {
+        document.querySelector(`[data-panel-visible="${name}"]`).checked = panel.visible;
+        document.querySelector(`[data-panel-size="${name}"]`).value = panel.size;
+        document.querySelector(`[data-panel-size-label="${name}"]`).textContent = `${panel.size} %`;
+        document.querySelector(`[data-panel-opacity="${name}"]`).value = panel.opacity;
+        document.querySelector(`[data-panel-opacity-label="${name}"]`).textContent = `${panel.opacity} %`;
+      });
+      applyMapPanelSettings();
+    }
+    function syncHudEditorControls() {
+      const settings = userSettings.mapPanels[selectedHudPanel];
+      document.querySelectorAll("[data-hud-select]").forEach(button => {
+        button.classList.toggle("active", button.dataset.hudSelect === selectedHudPanel);
+      });
+      document.getElementById("hudPanelVisible").checked = settings.visible;
+      document.getElementById("hudPanelSize").value = settings.size;
+      document.getElementById("hudPanelSizeLabel").textContent = `${settings.size} %`;
+      document.getElementById("hudPanelOpacity").value = settings.opacity;
+      document.getElementById("hudPanelOpacityLabel").textContent = `${settings.opacity} %`;
+      document.querySelectorAll("[data-map-panel]").forEach(panel => {
+        panel.classList.toggle("map-panel-selected", panel.dataset.mapPanel === selectedHudPanel && hudEditing);
+      });
+    }
+    function selectHudPanel(panelName) {
+      if (!userSettings.mapPanels[panelName]) return;
+      selectedHudPanel = panelName;
+      syncHudEditorControls();
+    }
+    function setHudEditing(enabled) {
+      hudEditing = enabled;
+      const mapView = document.getElementById("mapView");
+      const editor = document.getElementById("mapHudEditor");
+      mapView.classList.toggle("is-editing-hud", enabled);
+      editor.classList.toggle("hidden", !enabled);
+      syncHudEditorControls();
+    }
+    function applyMapPanelSettings() {
+      const mapView = document.getElementById("mapView");
+      const mapWidth = mapView.clientWidth;
+      const mapHeight = mapView.clientHeight;
+      Object.entries(userSettings.mapPanels).forEach(([name, settings]) => {
+        const panel = document.querySelector(`[data-map-panel="${name}"]`);
+        if (!panel) return;
+        panel.classList.toggle("hidden", !settings.visible);
+        panel.style.opacity = String(settings.opacity / 100);
+        panel.style.transform = `scale(${settings.size / 100})`;
+        panel.style.transformOrigin = settings.x === null && name === "report" ? "bottom right" : "top left";
+        panel.classList.toggle("map-panel-custom-position", Number.isFinite(settings.x) && Number.isFinite(settings.y));
+        if (Number.isFinite(settings.x) && Number.isFinite(settings.y)) {
+          if (mapWidth && mapHeight) {
+            const maxX = Math.max(0, mapWidth - panel.offsetWidth * settings.size / 100);
+            const maxY = Math.max(0, mapHeight - panel.offsetHeight * settings.size / 100);
+            settings.x = Math.min(settings.x, maxX / mapWidth);
+            settings.y = Math.min(settings.y, maxY / mapHeight);
+          }
+          panel.style.setProperty("--map-panel-x", `${settings.x * 100}%`);
+          panel.style.setProperty("--map-panel-y", `${settings.y * 100}%`);
+        } else {
+          panel.style.removeProperty("--map-panel-x");
+          panel.style.removeProperty("--map-panel-y");
+        }
+      });
+      syncHudEditorControls();
+    }
+    function saveMapPanelSettings() {
+      saveUserSettings();
+      applyMapPanelSettings();
+    }
+    function initializeMapPanelDragging() {
+      const mapView = document.getElementById("mapView");
+      document.querySelectorAll("[data-panel-drag]").forEach(handle => {
+        let drag = null;
+        handle.addEventListener("pointerdown", event => {
+          if (!hudEditing) return;
+          if (event.button !== 0 && event.pointerType !== "touch") return;
+          const panelName = handle.dataset.panelDrag;
+          selectHudPanel(panelName);
+          const panel = document.querySelector(`[data-map-panel="${panelName}"]`);
+          const mapBounds = mapView.getBoundingClientRect();
+          const panelBounds = panel.getBoundingClientRect();
+          const scale = userSettings.mapPanels[panelName].size / 100;
+          drag = {
+            panelName,
+            panel,
+            pointerId: event.pointerId,
+            mapBounds,
+            offsetX: (event.clientX - panelBounds.left) / scale,
+            offsetY: (event.clientY - panelBounds.top) / scale,
+            moved: false
+          };
+          handle.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        handle.addEventListener("pointermove", event => {
+          if (!drag || event.pointerId !== drag.pointerId) return;
+          const { panel, mapBounds, panelName } = drag;
+          const settings = userSettings.mapPanels[panelName];
+          const maxX = Math.max(0, mapView.clientWidth - panel.offsetWidth);
+          const maxY = Math.max(0, mapView.clientHeight - panel.offsetHeight);
+          const left = Math.min(maxX, Math.max(0, event.clientX - mapBounds.left - drag.offsetX));
+          const top = Math.min(maxY, Math.max(0, event.clientY - mapBounds.top - drag.offsetY));
+          settings.x = mapView.clientWidth ? left / mapView.clientWidth : 0;
+          settings.y = mapView.clientHeight ? top / mapView.clientHeight : 0;
+          panel.classList.add("map-panel-custom-position");
+          panel.style.transformOrigin = "top left";
+          panel.style.setProperty("--map-panel-x", `${settings.x * 100}%`);
+          panel.style.setProperty("--map-panel-y", `${settings.y * 100}%`);
+          drag.moved = true;
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        const finishDrag = event => {
+          if (!drag || event.pointerId !== drag.pointerId) return;
+          const moved = drag.moved;
+          drag = null;
+          if (moved) saveMapPanelSettings();
+          event.stopPropagation();
+        };
+        handle.addEventListener("pointerup", finishDrag);
+        handle.addEventListener("pointercancel", finishDrag);
+        handle.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+      });
+      mapView.addEventListener("click", event => {
+        if (!hudEditing) return;
+        const panel = event.target.closest("[data-map-panel]");
+        if (!panel) return;
+        event.preventDefault();
+        event.stopPropagation();
+        selectHudPanel(panel.dataset.mapPanel);
+      }, true);
+    }
+    function playNotificationSound() {
+      if (!userSettings.soundEnabled || userSettings.soundVolume === 0) return Promise.resolve();
+      const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextConstructor) return Promise.reject(new Error("Este navegador no admite audio web."));
+      if (!audioContext) audioContext = new AudioContextConstructor();
+      return audioContext.resume().then(() => {
+        const patterns = {
+          soft: [660],
+          clear: [740, 988],
+          urgent: [880, 660, 880]
+        };
+        const frequencies = patterns[userSettings.soundStyle];
+        const start = audioContext.currentTime;
+        frequencies.forEach((frequency, index) => {
+          const oscillator = audioContext.createOscillator();
+          const gain = audioContext.createGain();
+          const noteStart = start + index * 0.14;
+          const peak = Math.max(0.001, userSettings.soundVolume / 100 * 0.12);
+          oscillator.type = "sine";
+          oscillator.frequency.value = frequency;
+          gain.gain.setValueAtTime(0.001, noteStart);
+          gain.gain.exponentialRampToValueAtTime(peak, noteStart + 0.018);
+          gain.gain.exponentialRampToValueAtTime(0.001, noteStart + 0.105);
+          oscillator.connect(gain);
+          gain.connect(audioContext.destination);
+          oscillator.start(noteStart);
+          oscillator.stop(noteStart + 0.11);
+        });
+      });
+    }
+    function applyMunicipalityVisibility() {
+      if (!map || !apureMunicipalityLayer || !apureMunicipalityLabelLayer) return;
+      [apureMunicipalityLayer, apureMunicipalityLabelLayer].forEach(layer => {
+        if (userSettings.municipalitiesVisible && !map.hasLayer(layer)) layer.addTo(map);
+        else if (!userSettings.municipalitiesVisible && map.hasLayer(layer)) map.removeLayer(layer);
+      });
     }
     function saveState({ referencePlacesFirst = false } = {}) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -483,11 +741,13 @@
       document.getElementById("adminNav").classList.toggle("hidden", user.role !== "admin");
       document.getElementById("openPlace").classList.toggle("hidden", user.role !== "admin");
       if (user.role === "admin") renderAdmin();
+      renderReferencePlaces();
       renderRecords();
       showView("mapView");
       initializeMap();
     }
     function showView(viewId) {
+      if (viewId !== "mapView" && hudEditing) setHudEditing(false);
       document.querySelectorAll(".view").forEach(view => view.classList.toggle("hidden", view.id !== viewId));
       document.querySelectorAll(".nav-button").forEach(button => button.classList.toggle("active", button.dataset.view === viewId));
       document.querySelector(".topbar .map-search").classList.toggle("hidden", viewId !== "mapView");
@@ -495,6 +755,7 @@
       if (viewId === "mapView" && map) setTimeout(() => map.invalidateSize(), 80);
       if (viewId === "recordsView") renderRecords();
       if (viewId === "adminView" && currentUser?.role === "admin") renderAdmin();
+      if (viewId === "referencePlacesView") renderReferencePlaces();
     }
     function initializeMap() {
       if (!window.L) { document.getElementById("mapStatus").textContent = "No se pudo cargar el mapa. Verifica tu conexión a internet."; return; }
@@ -588,6 +849,7 @@
         map.setMaxBounds(apureBounds.pad(0.06));
         map.setMinZoom(map.getBoundsZoom(apureBounds.pad(0.06)));
         map.fitBounds(apureBounds, { padding: [30, 30] });
+        applyMunicipalityVisibility();
       });
       return apureMunicipalityLoadPromise;
     }
@@ -653,12 +915,12 @@
       return item.municipality || getApureMunicipality(Number(item.latitude), Number(item.longitude));
     }
     function setBaseLayer(layerName) {
+      currentMapLayer = layerName === "streets" ? "streets" : "satellite";
       if (!map) return;
       if (baseLayer) map.removeLayer(baseLayer);
       referenceLayers.forEach(layer => map.removeLayer(layer));
       referenceLayers = [];
-      currentMapLayer = layerName;
-      if (layerName === "satellite") {
+      if (currentMapLayer === "satellite") {
         baseLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community" });
         referenceLayers = [
           L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Place labels &copy; Esri and contributors" }),
@@ -785,31 +1047,6 @@
       return currentUser?.role === "admin" ||
         (item.createdBy === currentUser?.id && Number.isFinite(Number(item.ownerEditUntil)) && Date.now() < Number(item.ownerEditUntil));
     }
-    function bindEditableMarker(marker, item, type) {
-      const canEdit = type === "inspection" ? canEditInspection(item) : currentUser?.role === "admin";
-      if (!canEdit) return;
-      marker.on("dragend", event => {
-        if (!sharedDataReady) { renderMarkers(); showToast("Espera a que terminen de cargar los datos."); return; }
-        if (type === "inspection" && !canEditInspection(item)) {
-          renderMarkers();
-          showToast("Solo el administrador puede modificar inspecciones después de su fecha límite.");
-          return;
-        }
-        const location = event.target.getLatLng();
-        const municipality = getApureMunicipality(location.lat, location.lng);
-        if (type === "inspection" && !municipality) {
-          renderMarkers();
-          showToast("Las inspecciones deben permanecer dentro de un municipio de Apure.");
-          return;
-        }
-        item.latitude = location.lat;
-        item.longitude = location.lng;
-        if (type === "inspection") item.municipality = municipality;
-        saveState();
-        renderMarkers();
-        showToast("Ubicación actualizada.");
-      });
-    }
     function renderMarkers() {
       if (!map) return;
       renderMapDatePicker();
@@ -857,21 +1094,57 @@
         referenceMarkers.push(marker);
       });
       state.referencePlaces.forEach(place => {
-        const canEdit = currentUser?.role === "admin";
-        const marker = L.marker([place.latitude, place.longitude], { icon: L.divIcon({ className: "place-marker-icon", html: '<span class="place-marker"></span>', iconSize: [20, 20], iconAnchor: [10, 10] }), draggable: canEdit });
+        const marker = L.marker([place.latitude, place.longitude], { icon: L.divIcon({ className: "place-marker-icon", html: '<span class="place-marker"></span>', iconSize: [20, 20], iconAnchor: [10, 10] }), draggable: false, referencePlaceId: place.id });
         marker.bindTooltip(escapeHtml(place.name), { permanent: true, direction: "right", className: "place-label", offset: [8, 0] });
-        marker.bindPopup(`<div class="popup-title">${escapeHtml(place.name)}</div><div class="popup-detail">${escapeHtml(place.category)}${place.address ? `<br>${escapeHtml(place.address)}` : ""}${place.description ? `<br>${escapeHtml(place.description)}` : ""}<br>Coordenadas: ${place.latitude}, ${place.longitude}</div>${canEdit ? `<div class="popup-actions"><button class="button secondary small place-edit" type="button">Editar</button><button class="button danger small place-delete" type="button">Eliminar</button></div>` : ""}`);
+        const municipality = getApureMunicipality(Number(place.latitude), Number(place.longitude));
+        const inspectionAction = municipality
+          ? '<div class="popup-actions"><button class="button secondary small place-inspection" type="button">＋ Agregar inspección</button></div>'
+          : '<div class="popup-detail">Este lugar está fuera de los municipios de Apure y no puede usarse para una inspección.</div>';
+        marker.bindPopup(`<div class="popup-title">${escapeHtml(place.name)}</div><div class="popup-detail">${escapeHtml(place.category)}${place.address ? `<br>${escapeHtml(place.address)}` : ""}${place.description ? `<br>${escapeHtml(place.description)}` : ""}<br>Coordenadas: ${place.latitude}, ${place.longitude}</div>${inspectionAction}`);
         marker.on("click", () => focusMapPoint(place.latitude, place.longitude));
-        bindEditableMarker(marker, place, "place");
-        if (canEdit) marker.on("popupopen", event => {
+        marker.on("popupopen", event => {
           const popup = event.popup.getElement();
-          popup.querySelector(".place-edit").addEventListener("click", () => openPlaceForm(place));
-          popup.querySelector(".place-delete").addEventListener("click", () => deleteReferencePlace(place.id));
+          popup.querySelector(".place-inspection")?.addEventListener("click", clickEvent => {
+            clickEvent.preventDefault();
+            clickEvent.stopPropagation();
+            openReportAtReferencePlace(place);
+          });
         });
         markers.push(marker);
         referenceMarkers.push(marker);
       });
       updateReferenceMarkerVisibility();
+      renderReferencePlaces();
+    }
+    function renderReferencePlaces() {
+      const list = document.getElementById("referencePlacesList");
+      if (!list) return;
+      const count = state.referencePlaces.length;
+      document.getElementById("referencePlacesCount").textContent = `${count} ${count === 1 ? "lugar" : "lugares"}`;
+      if (!count) {
+        list.innerHTML = '<div class="empty-state">Todavía no se han agregado lugares manualmente.</div>';
+        return;
+      }
+      const isAdmin = currentUser?.role === "admin";
+      list.innerHTML = state.referencePlaces.map(place => {
+        const details = [place.category, place.address, place.description].filter(Boolean).map(escapeHtml).join(" · ");
+        const actions = `<button class="button secondary small" type="button" data-place-action="map" data-place-id="${escapeHtml(place.id)}">Ver en mapa</button>${isAdmin ? `<button class="button ghost small" type="button" data-place-action="edit" data-place-id="${escapeHtml(place.id)}">Editar</button><button class="button danger small" type="button" data-place-action="delete" data-place-id="${escapeHtml(place.id)}">Eliminar</button>` : ""}`;
+        return `<div class="admin-row reference-place-row"><div class="reference-place-details"><strong>${escapeHtml(place.name)}</strong><small>${details || "Sin detalles adicionales"}</small><small class="mono">${Number(place.latitude).toFixed(5)}, ${Number(place.longitude).toFixed(5)}</small></div><div class="row-actions">${actions}</div></div>`;
+      }).join("");
+    }
+    function openReportAtReferencePlace(place) {
+      if (!getApureMunicipality(Number(place.latitude), Number(place.longitude))) {
+        showToast("Solo se pueden registrar inspecciones dentro de los municipios de Apure.");
+        return;
+      }
+      openReport();
+      if (document.getElementById("reportModal").classList.contains("hidden")) return;
+      inspectionTitleEdited = true;
+      inspectionAddressEdited = true;
+      setCoordinates(Number(place.latitude), Number(place.longitude), { skipPlaceLookup: true });
+      document.getElementById("inspectionTitle").value = place.name.slice(0, 120);
+      document.getElementById("inspectionAddress").value = place.address || `${place.name}, ${place.category}`;
+      document.getElementById("reportMessage").textContent = `Inspección ubicada en ${place.name}.`;
     }
     function setCoordinates(latitude, longitude, target = {}) {
       document.getElementById(target.latitudeId || "latitude").value = latitude;
@@ -884,7 +1157,7 @@
         document.getElementById(target.messageId || "reportMessage").textContent = municipality
           ? `Municipio detectado: ${municipality}, Apure.`
           : "La ubicación debe estar dentro de uno de los municipios de Apure.";
-        if (!target.latitudeId && !editingInspectionId && municipality) fillInspectionPlace(latitude, longitude, municipality);
+        if (!target.latitudeId && !target.skipPlaceLookup && !editingInspectionId && municipality) fillInspectionPlace(latitude, longitude, municipality);
       }
     }
     async function fillInspectionPlace(latitude, longitude, municipality) {
@@ -1104,6 +1377,7 @@
         : "Inspección eliminada.");
     }
     function deleteReferencePlace(id) {
+      if (currentUser?.role !== "admin") return;
       if (!sharedDataReady) { showToast("Espera a que terminen de cargar los datos."); return; }
       if (!confirm("¿Eliminar este punto de referencia?")) return;
       state.referencePlaces = state.referencePlaces.filter(place => place.id !== id);
@@ -1540,6 +1814,7 @@
     function showToast(text) {
       const toast = document.getElementById("toast"); toast.textContent = text; toast.classList.remove("hidden");
       clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.add("hidden"), 3200);
+      if (userSettings.soundEnabled) playNotificationSound().catch(error => console.warn("No se pudo reproducir el aviso sonoro.", error));
     }
     function downloadTextFile(filename, content, type) {
       const url = URL.createObjectURL(new Blob([content], { type }));
@@ -1612,6 +1887,22 @@
       }
     }
     document.querySelectorAll(".nav-button").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
+    document.getElementById("referencePlacesList").addEventListener("click", event => {
+      const button = event.target.closest("[data-place-action]");
+      if (!button) return;
+      const place = state.referencePlaces.find(item => item.id === button.dataset.placeId);
+      if (!place) return;
+      if (button.dataset.placeAction === "edit") {
+        if (currentUser?.role === "admin") openPlaceForm(place);
+      } else if (button.dataset.placeAction === "delete") {
+        deleteReferencePlace(place.id);
+      } else if (button.dataset.placeAction === "map") {
+        showView("mapView");
+        focusMapPoint(Number(place.latitude), Number(place.longitude));
+        const marker = markers.find(item => item.options.referencePlaceId === place.id);
+        if (marker) setTimeout(() => marker.openPopup(), 100);
+      }
+    });
     document.getElementById("recordsBackToMap").addEventListener("click", () => showView("mapView"));
     document.getElementById("recordsYearFilter").addEventListener("change", event => {
       recordsYear = Number(event.target.value);
@@ -1723,7 +2014,117 @@
       if (!map) { document.getElementById("placeMessage").textContent = "El mapa aún no está disponible."; return; }
       startMapPick({ modalId: "placeModal", latitudeId: "placeLatitude", longitudeId: "placeLongitude", coordsLabelId: "placeCoordsLabel" });
     });
-    document.querySelectorAll("[data-filter]").forEach(input => input.addEventListener("change", renderMarkers));
+    syncMapSettingsControls();
+    initializeMapPanelDragging();
+    document.getElementById("finishHudEditing").addEventListener("click", () => setHudEditing(false));
+    document.getElementById("editHudFromSettings").addEventListener("click", () => {
+      showView("mapView");
+      setHudEditing(true);
+    });
+    document.querySelectorAll("[data-hud-select]").forEach(button => button.addEventListener("click", () => selectHudPanel(button.dataset.hudSelect)));
+    document.getElementById("hudPanelVisible").addEventListener("change", event => {
+      userSettings.mapPanels[selectedHudPanel].visible = event.currentTarget.checked;
+      saveMapPanelSettings();
+    });
+    document.getElementById("hudPanelSize").addEventListener("input", event => {
+      userSettings.mapPanels[selectedHudPanel].size = Number(event.currentTarget.value);
+      saveMapPanelSettings();
+    });
+    document.getElementById("hudPanelOpacity").addEventListener("input", event => {
+      userSettings.mapPanels[selectedHudPanel].opacity = Number(event.currentTarget.value);
+      saveMapPanelSettings();
+    });
+    document.getElementById("resetHudPanel").addEventListener("click", () => {
+      Object.assign(userSettings.mapPanels[selectedHudPanel], { size: 100, opacity: 90, x: null, y: null });
+      saveMapPanelSettings();
+    });
+    document.querySelectorAll("[data-filter]").forEach(input => input.addEventListener("change", event => {
+      userSettings.visibleRisks[event.currentTarget.dataset.filter] = event.currentTarget.checked;
+      syncMapSettingsControls();
+      saveUserSettings();
+      renderMarkers();
+    }));
+    document.getElementById("settingsMapLayer").addEventListener("change", event => {
+      userSettings.mapLayer = event.currentTarget.value;
+      syncMapSettingsControls();
+      saveUserSettings();
+      setBaseLayer(userSettings.mapLayer);
+    });
+    document.getElementById("mapLayerSelect").addEventListener("change", event => {
+      userSettings.mapLayer = event.currentTarget.value;
+      syncMapSettingsControls();
+      saveUserSettings();
+      setBaseLayer(userSettings.mapLayer);
+    });
+    document.getElementById("settingsMunicipalities").addEventListener("change", event => {
+      userSettings.municipalitiesVisible = event.currentTarget.checked;
+      saveUserSettings();
+      applyMunicipalityVisibility();
+    });
+    document.getElementById("settingsSoundEnabled").addEventListener("change", event => {
+      userSettings.soundEnabled = event.currentTarget.checked;
+      saveUserSettings();
+      if (userSettings.soundEnabled) playNotificationSound().catch(error => {
+        console.error("No se pudo activar el sonido en este navegador.", error);
+        document.getElementById("soundTestStatus").textContent = "No se pudo activar el audio en este navegador.";
+      });
+    });
+    document.getElementById("settingsSoundStyle").addEventListener("change", event => {
+      userSettings.soundStyle = event.currentTarget.value;
+      saveUserSettings();
+    });
+    document.getElementById("settingsSoundVolume").addEventListener("input", event => {
+      userSettings.soundVolume = Number(event.currentTarget.value);
+      document.getElementById("settingsSoundVolumeLabel").textContent = `${userSettings.soundVolume} %`;
+      saveUserSettings();
+    });
+    document.getElementById("testSound").addEventListener("click", () => {
+      if (!userSettings.soundEnabled) {
+        document.getElementById("soundTestStatus").textContent = "Activa los sonidos para probarlos.";
+        return;
+      }
+      if (userSettings.soundVolume === 0) {
+        document.getElementById("soundTestStatus").textContent = "Sube el volumen para probar el sonido.";
+        return;
+      }
+      playNotificationSound().then(() => {
+        document.getElementById("soundTestStatus").textContent = "Aviso reproducido.";
+      }).catch(error => {
+        console.error("No se pudo reproducir el sonido de prueba.", error);
+        document.getElementById("soundTestStatus").textContent = "No se pudo reproducir. Revisa el audio del dispositivo.";
+      });
+    });
+    document.querySelectorAll("[data-panel-visible]").forEach(input => input.addEventListener("change", event => {
+      userSettings.mapPanels[event.currentTarget.dataset.panelVisible].visible = event.currentTarget.checked;
+      saveMapPanelSettings();
+    }));
+    document.querySelectorAll("[data-panel-size]").forEach(input => input.addEventListener("input", event => {
+      const panelName = event.currentTarget.dataset.panelSize;
+      userSettings.mapPanels[panelName].size = Number(event.currentTarget.value);
+      document.querySelector(`[data-panel-size-label="${panelName}"]`).textContent = `${event.currentTarget.value} %`;
+      saveMapPanelSettings();
+    }));
+    document.querySelectorAll("[data-panel-opacity]").forEach(input => input.addEventListener("input", event => {
+      const panelName = event.currentTarget.dataset.panelOpacity;
+      userSettings.mapPanels[panelName].opacity = Number(event.currentTarget.value);
+      document.querySelector(`[data-panel-opacity-label="${panelName}"]`).textContent = `${event.currentTarget.value} %`;
+      saveMapPanelSettings();
+    }));
+    document.querySelectorAll("[data-panel-position-reset]").forEach(button => button.addEventListener("click", event => {
+      const panelName = event.currentTarget.dataset.panelPositionReset;
+      userSettings.mapPanels[panelName].x = null;
+      userSettings.mapPanels[panelName].y = null;
+      saveMapPanelSettings();
+    }));
+    document.getElementById("resetSettings").addEventListener("click", () => {
+      userSettings = createDefaultSettings();
+      syncMapSettingsControls();
+      saveUserSettings();
+      setBaseLayer(userSettings.mapLayer);
+      applyMunicipalityVisibility();
+      renderMarkers();
+      showToast("Se restauraron las preferencias predeterminadas.");
+    });
     document.getElementById("zoomApure").addEventListener("click", () => {
       if (apureMunicipalityLayer) map?.fitBounds(apureMunicipalityLayer.getBounds(), { padding: [30, 30] });
       else showToast("Los límites municipales de Apure todavía se están cargando.");
@@ -1767,7 +2168,6 @@
     };
     if (mapToolsBreakpoint.addEventListener) mapToolsBreakpoint.addEventListener("change", handleMapToolsBreakpoint);
     else mapToolsBreakpoint.addListener(handleMapToolsBreakpoint);
-    document.getElementById("mapLayerSelect").addEventListener("change", event => setBaseLayer(event.target.value));
     document.getElementById("mapSearchForm").addEventListener("submit", event => {
       event.preventDefault();
       searchMapPlaces(document.getElementById("mapSearchInput").value);
@@ -1779,12 +2179,37 @@
     document.getElementById("locateMe").addEventListener("click", () => {
       if (!navigator.geolocation) { showToast("El navegador no permite geolocalización."); return; }
       navigator.geolocation.getCurrentPosition(position => {
-        if (!getApureMunicipality(position.coords.latitude, position.coords.longitude)) {
-          showToast("Tu ubicación está fuera de Apure; el mapa permanece enfocado en el estado.");
-          return;
+        const location = [position.coords.latitude, position.coords.longitude];
+        const accuracy = Math.max(0, position.coords.accuracy);
+        if (!currentLocationAccuracyCircle) {
+          currentLocationAccuracyCircle = L.circle(location, {
+            radius: accuracy,
+            color: "#1677ff",
+            weight: 1,
+            opacity: 0.65,
+            fillColor: "#1677ff",
+            fillOpacity: 0.12,
+            interactive: false
+          }).addTo(map);
+        } else {
+          currentLocationAccuracyCircle.setLatLng(location).setRadius(accuracy);
         }
-        map?.setView([position.coords.latitude, position.coords.longitude], 14);
-        showToast("Ubicación actual encontrada.");
+        if (!currentLocationMarker) {
+          currentLocationMarker = L.circleMarker(location, {
+            radius: 9,
+            color: "#fff",
+            weight: 3,
+            fillColor: "#1677ff",
+            fillOpacity: 1,
+            className: "current-location-marker",
+            bubblingMouseEvents: false
+          }).addTo(map);
+          currentLocationMarker.bindTooltip("Tu ubicación actual", { direction: "top", offset: [0, -8] });
+        } else {
+          currentLocationMarker.setLatLng(location);
+        }
+        map?.setView(location, 16);
+        showToast(`Ubicación actual encontrada (precisión aproximada: ${Math.round(accuracy)} m).`);
       }, () => showToast("No se pudo obtener la ubicación. Revisa los permisos del navegador."), { enableHighAccuracy: true, timeout: 12000 });
     });
     document.getElementById("riskFilter").addEventListener("change", renderRecords);
