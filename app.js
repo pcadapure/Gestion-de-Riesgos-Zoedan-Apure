@@ -850,6 +850,7 @@
         map.setMinZoom(map.getBoundsZoom(apureBounds.pad(0.06)));
         map.fitBounds(apureBounds, { padding: [30, 30] });
         applyMunicipalityVisibility();
+        renderMarkers();
       });
       return apureMunicipalityLoadPromise;
     }
